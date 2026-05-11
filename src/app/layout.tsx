@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next"
+import { Geist, Geist_Mono } from "next/font/google"
 import { Toaster } from "@/components/ui/sonner"
 import { ThemeProvider } from "@/components/shared/theme-provider"
 import {
@@ -8,6 +9,18 @@ import {
   DEFAULT_CITY_NAME,
 } from "@/lib/constants"
 import "./globals.css"
+
+const geistSans = Geist({
+  variable: "--font-sans",
+  subsets: ["latin"],
+  display: "swap",
+})
+
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+  display: "swap",
+})
 
 export const metadata: Metadata = {
   title: {
@@ -58,7 +71,11 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="id" suppressHydrationWarning>
+    <html
+      lang="id"
+      suppressHydrationWarning
+      className={`${geistSans.variable} ${geistMono.variable}`}
+    >
       <body className="min-h-svh antialiased font-sans">
         <ThemeProvider>{children}</ThemeProvider>
         <Toaster richColors position="top-center" />

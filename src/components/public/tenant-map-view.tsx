@@ -11,11 +11,13 @@ import {
   DEFAULT_ZOOM,
   TAGLINE,
 } from "@/lib/constants"
-// IMPORTANT: rename Map → MapContainer untuk avoid shadowing native JS `Map`
+// shadcn-map: `Map` di-rename ke `MapContainer` untuk avoid shadowing native JS `Map`
 import {
   Map as MapContainer,
   MapTileLayer,
   MapZoomControl,
+  MapCircle,
+  MapMarkerClusterGroup,
 } from "@/components/ui/map"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -35,6 +37,7 @@ import { useNearbyTenants } from "@/hooks/use-nearby-tenants"
 import { CategoryFilter } from "./category-filter"
 import { NearbyButton } from "./nearby-button"
 import { TenantMarker } from "./tenant-marker"
+import { TenantDetailContainer } from "./tenant-detail-container"
 import type { Category } from "@/types"
 
 interface TenantMapViewProps {
@@ -52,6 +55,9 @@ const HARI_LIBUR_DAYS = [
   "sabtu",
 ] as const
 
+/** Radius visual area Dimong (meter) — bukan filter logika */
+const DIMONG_AREA_RADIUS_M = 1000
+
 export function TenantMapView({
   initialTenants,
   initialCategories,
@@ -66,10 +72,11 @@ export function TenantMapView({
   const [onlyOpenToday, setOnlyOpenToday] = useState(false)
   const [filterSheetOpen, setFilterSheetOpen] = useState(false)
 
-  // Filter pipeline:
-  // 1. Apply category filter
-  // 2. Apply "open today" filter
-  // 3. If nearby active: keep only tenants in result + sort by distance
+  // Selected tenant untuk Sheet/Drawer detail
+  const [selectedTenant, setSelectedTenant] =
+    useState<TenantWithProducts | null>(null)
+
+  // Filter pipeline
   const filteredTenants = useMemo(() => {
     let result = tenants
 
@@ -87,11 +94,9 @@ export function TenantMapView({
       })
     }
 
-    // Nearby active → restrict to nearby IDs + sort by distance order
     if (nearby.orderedIds !== null) {
       const nearbySet = new Set(nearby.orderedIds)
       result = result.filter((t) => nearbySet.has(t.id))
-      // Build position map (use globalThis.Map to disambiguate from shadcn import)
       const orderMap: globalThis.Map<string, number> = new globalThis.Map(
         nearby.orderedIds.map((id, idx) => [id, idx] as [string, number])
       )
@@ -104,17 +109,6 @@ export function TenantMapView({
     return result
   }, [tenants, selectedCategoryId, onlyOpenToday, nearby.orderedIds])
 
-  // Map: tenant id → emoji (dari kategori produk pertama)
-  const tenantEmojis = useMemo(() => {
-    const m: globalThis.Map<string, string> = new globalThis.Map()
-    for (const t of tenants) {
-      const primaryCatId = t.products?.[0]?.category_id
-      const cat = categories.find((c) => c.id === primaryCatId)
-      m.set(t.id, cat?.icon ?? "🍴")
-    }
-    return m
-  }, [tenants, categories])
-
   function handleResetFilter() {
     setSelectedCategoryId(null)
     setOnlyOpenToday(false)
@@ -126,7 +120,6 @@ export function TenantMapView({
     (onlyOpenToday ? 1 : 0) +
     (nearby.orderedIds !== null ? 1 : 0)
 
-  // Center peta ke lokasi user kalau nearby aktif (better UX)
   const mapCenter: [number, number] = nearby.userLocation
     ? [nearby.userLocation.latitude, nearby.userLocation.longitude]
     : DEFAULT_CENTER
@@ -137,7 +130,6 @@ export function TenantMapView({
       selectedCategoryId={selectedCategoryId}
       onSelectCategory={(id) => {
         setSelectedCategoryId(id)
-        // Auto close sheet on mobile after selection
         setFilterSheetOpen(false)
       }}
       onlyOpenToday={onlyOpenToday}
@@ -151,11 +143,15 @@ export function TenantMapView({
     />
   )
 
+  // Distance untuk tenant yang sedang di-select
+  const selectedDistance = selectedTenant
+    ? nearby.distances.get(selectedTenant.id) ?? null
+    : null
+
   return (
     <div className="flex h-svh w-full overflow-hidden">
-      {/* === Desktop sidebar === */}
+      {/* === Desktop sidebar (filter) === */}
       <aside className="hidden w-80 shrink-0 flex-col border-r bg-card lg:flex">
-        {/* Brand */}
         <div className="border-b p-4 sm:p-5">
           <h1 className="text-lg font-bold tracking-tight">{BRAND_NAME}</h1>
           <p className="mt-0.5 text-xs italic text-muted-foreground">
@@ -165,8 +161,6 @@ export function TenantMapView({
             <MapPin className="size-3" aria-hidden />
             {DEFAULT_CITY_NAME}
           </div>
-
-          {/* Nearby button — under brand */}
           <div className="mt-3">
             <NearbyButton nearby={nearby} className="w-full" />
           </div>
@@ -174,7 +168,6 @@ export function TenantMapView({
 
         <div className="flex-1 overflow-y-auto">{filterContent}</div>
 
-        {/* Footer */}
         <div className="border-t p-3 text-center">
           <Link
             href="/login"
@@ -187,7 +180,7 @@ export function TenantMapView({
 
       {/* === Map area === */}
       <div className="relative flex-1">
-        {/* Mobile brand chip + nearby button (top-left) */}
+        {/* Mobile brand chip + nearby button */}
         <div className="pointer-events-none absolute left-3 top-3 z-[800] flex flex-col gap-2 lg:hidden">
           <div className="pointer-events-auto rounded-full border bg-background/90 px-3 py-1.5 shadow-sm backdrop-blur-md">
             <div className="flex items-center gap-1.5">
@@ -197,14 +190,12 @@ export function TenantMapView({
               </span>
             </div>
           </div>
-
-          {/* Mobile nearby button — separate row, more tappable */}
           <div className="pointer-events-auto">
             <NearbyButton nearby={nearby} />
           </div>
         </div>
 
-        {/* Empty state overlay — filter no match but DB has tenants */}
+        {/* Empty state: filter no match */}
         {filteredTenants.length === 0 && tenants.length > 0 ? (
           <div className="pointer-events-none absolute inset-x-3 top-32 z-[800] mx-auto max-w-md lg:left-6 lg:right-6 lg:top-6">
             <div className="pointer-events-auto rounded-lg border bg-background/95 p-4 text-center shadow-lg backdrop-blur">
@@ -230,7 +221,7 @@ export function TenantMapView({
           </div>
         ) : null}
 
-        {/* Empty state — DB kosong sama sekali */}
+        {/* Empty state: DB kosong */}
         {tenants.length === 0 ? (
           <div className="pointer-events-none absolute inset-x-3 top-16 z-[800] mx-auto max-w-md lg:left-6 lg:right-6 lg:top-6">
             <div className="pointer-events-auto rounded-lg border bg-background/95 p-4 text-center shadow-lg backdrop-blur">
@@ -251,18 +242,44 @@ export function TenantMapView({
           className="h-full w-full"
         >
           <MapTileLayer />
-          <MapZoomControl />
-          {filteredTenants.map((t) => (
-            <TenantMarker
-              key={t.id}
-              tenant={t}
-              emoji={tenantEmojis.get(t.id) ?? "🍴"}
-              distanceMeters={nearby.distances.get(t.id) ?? null}
-            />
-          ))}
+
+          {/* Zoom control — pojok kanan atas (Tailwind positioning shadcn-map) */}
+          <MapZoomControl position="top-2 right-2" />
+
+          {/* Area Dimong visual — lingkaran amber, visual only */}
+          <MapCircle
+            center={DEFAULT_CENTER}
+            radius={DIMONG_AREA_RADIUS_M}
+            pathOptions={{
+              color: "#d97706", // amber-600
+              weight: 2,
+              opacity: 0.7,
+              fillColor: "#f59e0b", // amber-500
+              fillOpacity: 0.08,
+              dashArray: "6 6",
+              interactive: false,
+            }}
+          />
+
+          {/* Markers dalam cluster group — auto-cluster kalau dekat.
+              Default style ditangani globals.css (override marker-cluster-*) */}
+          <MapMarkerClusterGroup
+            showCoverageOnHover={false}
+            spiderfyOnMaxZoom
+            maxClusterRadius={50}
+            disableClusteringAtZoom={18}
+          >
+            {filteredTenants.map((t) => (
+              <TenantMarker
+                key={t.id}
+                tenant={t}
+                onSelect={setSelectedTenant}
+              />
+            ))}
+          </MapMarkerClusterGroup>
         </MapContainer>
 
-        {/* === Mobile filter FAB (bottom-right) === */}
+        {/* Mobile filter FAB */}
         <div className="absolute bottom-6 right-4 z-[800] lg:hidden">
           <Sheet open={filterSheetOpen} onOpenChange={setFilterSheetOpen}>
             <SheetTrigger asChild>
@@ -293,6 +310,13 @@ export function TenantMapView({
           </Sheet>
         </div>
       </div>
+
+      {/* === Tenant detail Sheet/Drawer (2-state: preview & menu) === */}
+      <TenantDetailContainer
+        tenant={selectedTenant}
+        distanceMeters={selectedDistance}
+        onClose={() => setSelectedTenant(null)}
+      />
     </div>
   )
 }
